@@ -9,6 +9,7 @@ from ..objective.amici_util import (
 from ..objective.constants import FVAL, GRAD, HESS, RES, SRES, RDATAS
 from .problem import InnerProblem
 from .solver import InnerSolver, AnalyticalInnerSolver
+from .optimal_scaling_solver import OptimalScalingInnerSolver
 
 try:
     import amici
@@ -42,7 +43,8 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
 
         if inner_solver is None:
             # inner_solver = NumericalInnerSolver()
-            inner_solver = AnalyticalInnerSolver()
+            # inner_solver = AnalyticalInnerSolver()
+            inner_solver = OptimalScalingInnerSolver()
         self.inner_solver = inner_solver
 
     def initialize(self):
@@ -142,15 +144,7 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
             amici_model=amici_model
         )
 
-        if sensi_order == 0:
-            return {FVAL: nllh,
-                    GRAD: snllh,
-                    HESS: s2nllh,
-                    RES: res,
-                    SRES: sres,
-                    RDATAS: rdatas
-                    }
-        else:
+        if sensi_order > 0:
             amici_solver.setSensitivityOrder(sensi_order)
 
             # resimulate
@@ -161,7 +155,17 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
                 edatas,
                 num_threads=min(n_threads, len(edatas)),
             )
+            sy = [rdata['sy'] for rdata in rdatas]
+            snllh = self.inner_solver.calculate_gradients(self.inner_problem, x_inner_opt, sim, sy)
 
-            return calculate_function_values(
-                rdatas, sensi_order, mode, amici_model, amici_solver, edatas,
-                x_ids, parameter_mapping,fim_for_hess)
+        return {FVAL: nllh,
+                GRAD: snllh,
+                HESS: s2nllh,
+                RES: res,
+                SRES: sres,
+                RDATAS: rdatas
+                }
+
+            #return calculate_function_values(
+            #    rdatas, sensi_order, mode, amici_model, amici_solver, edatas,
+            #    x_ids, parameter_mapping,fim_for_hess)

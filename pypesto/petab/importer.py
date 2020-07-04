@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import numpy as np
 import os
@@ -12,6 +11,7 @@ from typing import List, Sequence, Union
 from ..problem import Problem
 from ..objective import AmiciObjective, AmiciObjectBuilder, AggregatedObjective
 from ..hierarchical.problem import InnerProblem
+from ..hierarchical.optimal_scaling_problem import OptimalScalingProblem
 from ..hierarchical.calculator import HierarchicalAmiciCalculator
 from ..objective.priors import NegLogParameterPriors, \
     get_parameter_prior_dict
@@ -204,6 +204,7 @@ class PetabImporter(AmiciObjectBuilder):
             edatas: Sequence['amici.ExpData'] = None,
             force_compile: bool = False,
             hierarchical: bool = False,
+            qualitative: bool = False,
             **kwargs
     ) -> AmiciObjective:
         """Create a :class:`pypesto.AmiciObjective`.
@@ -265,6 +266,12 @@ class PetabImporter(AmiciObjectBuilder):
         calculator = None
         if hierarchical:
             inner_problem = InnerProblem.from_petab_amici(
+                self.petab_problem, model, edatas)
+            if not inner_problem.is_empty():
+                calculator = HierarchicalAmiciCalculator(inner_problem)
+
+        if qualitative:
+            inner_problem = OptimalScalingProblem.from_petab_amici(
                 self.petab_problem, model, edatas)
             if not inner_problem.is_empty():
                 calculator = HierarchicalAmiciCalculator(inner_problem)

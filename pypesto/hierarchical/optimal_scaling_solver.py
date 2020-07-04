@@ -6,6 +6,7 @@ from ..optimize import Optimizer
 from .parameter import InnerParameter
 from .problem import InnerProblem
 from .solver import InnerSolver
+from .optimal_scaling_problem import OptimalScalingProblem
 
 REDUCED = 'reduced'
 STANDARD = 'standard'
@@ -82,8 +83,31 @@ class OptimalScalingInnerSolver(InnerSolver):
             obj = np.sum(
                 [x_inner_opt[idx]['fun'] for idx in range(len(x_inner_opt))]
             )
-        print(obj)
         return obj
+
+    def calculate_gradients(self, problem, x_inner_opt, sim, sy):
+        grad = 0.0
+        par_idx = 0
+        for idx, gr in enumerate(problem.get_groups_for_xs(InnerParameter.OPTIMALSCALING)):
+            xi = get_xi(gr, problem, x_inner_opt[idx], sim, self.options)
+            sim_all = get_sim_all(problem.get_xs_for_group(gr), sim)
+            sy_all = get_sy_all(problem.get_xs_for_group(gr), sim, sy, par_idx)
+            res = np.block([xi[:problem.num_datapoints] - sim_all,
+                            np.zeros(problem.num_inner_params - problem.num_datapoints)])
+
+            df_dxi = 2 * problem.W.dot(res)
+
+            mu = get_mu(problem, xi)
+
+            # for theta_i in theta:
+            dy_dtheta = get_dy_dtheta(problem, sy)
+
+            dxi_dtheta = calculate_dxi_dtheta(problem, xi, mu, dy_dtheta)
+
+            df_dtheta = -2 * problem.W.dot(dy_dtheta).dot(res)
+
+            grad += dxi_dtheta.dot(df_dxi) + df_dtheta
+        return grad
 
     @staticmethod
     def get_default_options() -> Dict:
@@ -96,6 +120,66 @@ class OptimalScalingInnerSolver(InnerSolver):
                    'intervalConstraints': 'max',
                    'minGap': 1e-16}
         return options
+
+
+def calculate_dxi_dtheta(problem, xi, mu, dy_dtheta):
+    from scipy import linalg
+    A = np.block([[2 * problem.W, problem.C.transpose()],
+                  [(mu*problem.C.transpose()).transpose(), np.diag(problem.C.dot(xi))]])
+
+    b = np.block([2*dy_dtheta.dot(problem.W), np.zeros(problem.num_constr_full)])
+
+    dxi_dtheta = linalg.lstsq(A, b)
+    return dxi_dtheta[0][:problem.num_inner_params]
+
+
+def get_dy_dtheta(problem, sy):
+    dy_dtheta = np.zeros(problem.num_inner_params)
+    # TODO: wrong order of datapoints
+    dy_dtheta[:problem.num_datapoints] = np.array([sy[idx][0][5][0] for idx in range(len(sy))])
+    dy_dtheta = dy_dtheta[[1, 0, 2]]
+
+    return np.block([dy_dtheta, np.zeros(2*problem.num_categories)])
+
+
+def get_mu(problem: OptimalScalingProblem, xi):
+    mu = np.zeros(problem.num_constr_full)
+    for idx in range(problem.num_datapoints):
+        cat_idx = problem.get_cat_for_xi_idx(idx)
+        x_lower = xi[problem.lb_indices[cat_idx]]
+        x_upper = xi[problem.ub_indices[cat_idx]]
+        y_surr = xi[idx]
+        if np.isclose(y_surr, x_lower):
+            mu[idx] = 1
+        if np.isclose(y_surr, x_upper):
+            mu[problem.num_datapoints + idx] = 1
+
+    for idx in range(problem.num_categories - 1):
+        x_lower = xi[problem.lb_indices[idx] + 1]
+        x_upper = xi[problem.ub_indices[idx]]
+        if np.isclose(x_lower, x_upper):
+            mu[2*problem.num_datapoints + idx] = 1
+
+    return mu
+
+
+def get_xi(gr,
+           problem: OptimalScalingProblem,
+           x_inner_opt: Dict,
+           sim: List[np.ndarray],
+           options: Dict):
+
+    xs = problem.get_xs_for_group(gr)
+    interval_range, interval_gap = \
+        compute_interval_constraints(xs, sim, options)
+
+    xi = np.zeros(problem.num_inner_params)
+    surrogate_all, x_lower, x_upper = \
+        get_surrogate_all(xs, x_inner_opt['x'], sim, interval_range, interval_gap, options)
+    xi[:problem.num_datapoints] = surrogate_all.flatten()
+    xi[problem.lb_indices] = x_lower
+    xi[problem.ub_indices] = x_upper
+    return xi
 
 
 def optimize_surrogate_data(xs: List[InnerParameter],
@@ -176,6 +260,17 @@ def get_min_max(xs: List[InnerParameter],
     return min_all, max_all
 
 
+def get_sy_all(xs, sim, sy, par_idx):
+    sy_all = []
+    for x in xs:
+        for sy_i, mask_i in \
+                zip(sy, x.ixs):
+            sim_sy = sy_i[mask_i]
+            if mask_i.any():
+                sy_all.append(sim_sy[0])
+    return 0
+
+
 def get_sim_all(xs, sim: List[np.ndarray]) -> list:
     """"Get list of all simulations for all xs"""
 
@@ -185,8 +280,45 @@ def get_sim_all(xs, sim: List[np.ndarray]) -> list:
                 zip(sim, x.ixs):
             sim_x = sim_i[mask_i]
             if mask_i.any():
-                sim_all.append(sim_x[0])
+                for sim_x_i in sim_x:
+                    sim_all.append(sim_x_i)
     return sim_all
+
+
+def get_surrogate_all(xs,
+                      optimal_scaling_bounds,
+                      sim,
+                      interval_range,
+                      interval_gap,
+                      options):
+    if options['reparameterized']:
+        optimal_scaling_bounds = \
+            xi2y(optimal_scaling_bounds, xs, interval_gap, interval_range)
+    surrogate_all = []
+    x_lower_all = []
+    x_upper_all = []
+    for x in xs:
+        x_upper, x_lower = \
+            get_bounds_for_category(
+                x, optimal_scaling_bounds, interval_gap, options
+            )
+        for sim_i, mask_i in \
+                zip(sim, x.ixs):
+            if mask_i.any():
+                y_sim = sim_i[mask_i]
+                for y_sim_i in y_sim:
+                    if x_lower > y_sim_i:
+                        y_surrogate = x_lower
+                    elif y_sim_i > x_upper:
+                        y_surrogate = x_upper
+                    else:
+                        y_surrogate = y_sim_i
+                    surrogate_all.append(y_surrogate)
+                    if x_lower not in x_lower_all:
+                        x_lower_all.append(x_lower)
+                    if x_upper not in x_upper_all:
+                        x_upper_all.append(x_upper)
+    return np.array(surrogate_all), np.array(x_lower_all), np.array(x_upper_all)
 
 
 def get_weight_for_surrogate(xs: List[InnerParameter],
@@ -199,7 +331,7 @@ def get_weight_for_surrogate(xs: List[InnerParameter],
     for idx in range(len(sim_x_all) - 1):
         v_net += np.abs(sim_x_all[idx + 1] - sim_x_all[idx])
     w = 0.5 * np.sum(np.abs(sim_x_all)) + v_net + eps
-    return w ** 2
+    return 1  # TODO: w ** 2
 
 
 def compute_interval_constraints(xs: List[InnerParameter],
@@ -235,7 +367,7 @@ def compute_interval_constraints(xs: List[InnerParameter],
         )
     if interval_gap < eps:
         interval_gap = eps
-    return interval_range, interval_gap
+    return 0.0, 0.0  # TODO: interval_range, interval_gap
 
 
 def y2xi(optimal_scaling_bounds: np.ndarray,
@@ -314,13 +446,14 @@ def obj_surrogate_data(xs: List[InnerParameter],
                 zip(sim, x.ixs):
             if mask_i.any():
                 y_sim = sim_i[mask_i]
-                if x_lower > y_sim:
-                    y_surrogate = x_lower
-                elif y_sim > x_upper:
-                    y_surrogate = x_upper
-                else:
-                    y_surrogate = y_sim
-                obj += (y_surrogate - y_sim) ** 2
+                for y_sim_i in y_sim:
+                    if x_lower > y_sim_i:
+                        y_surrogate = x_lower
+                    elif y_sim_i > x_upper:
+                        y_surrogate = x_upper
+                    else:
+                        y_surrogate = y_sim_i
+                    obj += (y_surrogate - y_sim_i) ** 2
     obj = np.divide(obj, w)
     return obj
 
