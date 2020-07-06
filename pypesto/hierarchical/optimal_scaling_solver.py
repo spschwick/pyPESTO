@@ -85,29 +85,48 @@ class OptimalScalingInnerSolver(InnerSolver):
             )
         return obj
 
-    def calculate_gradients(self, problem, x_inner_opt, sim, sy):
-        grad = 0.0
-        par_idx = 0
-        for idx, gr in enumerate(problem.get_groups_for_xs(InnerParameter.OPTIMALSCALING)):
-            xi = get_xi(gr, problem, x_inner_opt[idx], sim, self.options)
-            sim_all = get_sim_all(problem.get_xs_for_group(gr), sim)
-            sy_all = get_sy_all(problem.get_xs_for_group(gr), sim, sy, par_idx)
-            res = np.block([xi[:problem.num_datapoints] - sim_all,
-                            np.zeros(problem.num_inner_params - problem.num_datapoints)])
+    def calculate_gradients(self,
+                            problem: OptimalScalingProblem,
+                            x_inner_opt,
+                            sim,
+                            sy,
+                            parameter_mapping,
+                            par_opt_ids,
+                            amici_model,
+                            snllh
+                            ):
+        condition_map_sim_var = parameter_mapping[0].map_sim_var
+        par_sim_ids = list(amici_model.getParameterIds())
+        # TODO: Doesn't work with condition specific parameters
+        for par_sim, par_opt in condition_map_sim_var.items():
+            if not isinstance(par_opt, str):
+                continue
+            if par_opt.startswith('optimalScaling_'):
+                continue
+            par_sim_idx = par_sim_ids.index(par_sim)
+            par_opt_idx = par_opt_ids.index(par_opt)
+            grad = 0.0
+            for idx, gr in enumerate(problem.get_groups_for_xs(InnerParameter.OPTIMALSCALING)):
+                xi = get_xi(gr, problem, x_inner_opt[idx], sim, self.options)
+                sim_all = get_sim_all(problem.get_xs_for_group(gr), sim)
+                sy_all = get_sy_all(problem.get_xs_for_group(gr), sy, par_sim_idx)
+                res = np.block([xi[:problem.groups[gr]['num_datapoints']] - sim_all,
+                                np.zeros(problem.groups[gr]['num_inner_params'] - problem.groups[gr]['num_datapoints'])])
 
-            df_dxi = 2 * problem.W.dot(res)
+                df_dxi = 2 * problem.W.dot(res)
 
-            mu = get_mu(problem, xi)
+                mu = get_mu(gr, problem, xi)
 
-            # for theta_i in theta:
-            dy_dtheta = get_dy_dtheta(problem, sy)
+                # for theta_i in theta:
+                dy_dtheta = get_dy_dtheta(gr, problem, sy_all)
 
-            dxi_dtheta = calculate_dxi_dtheta(problem, xi, mu, dy_dtheta)
+                dxi_dtheta = calculate_dxi_dtheta(gr, problem, xi, mu, dy_dtheta)
 
-            df_dtheta = -2 * problem.W.dot(dy_dtheta).dot(res)
+                df_dtheta = -2 * problem.W.dot(dy_dtheta).dot(res)
 
-            grad += dxi_dtheta.dot(df_dxi) + df_dtheta
-        return grad
+                grad += dxi_dtheta.dot(df_dxi) + df_dtheta
+            snllh[par_opt_idx] = grad
+        return snllh
 
     @staticmethod
     def get_default_options() -> Dict:
@@ -122,43 +141,46 @@ class OptimalScalingInnerSolver(InnerSolver):
         return options
 
 
-def calculate_dxi_dtheta(problem, xi, mu, dy_dtheta):
+def calculate_dxi_dtheta(gr,
+                         problem: OptimalScalingProblem,
+                         xi,
+                         mu,
+                         dy_dtheta):
     from scipy import linalg
     A = np.block([[2 * problem.W, problem.C.transpose()],
                   [(mu*problem.C.transpose()).transpose(), np.diag(problem.C.dot(xi))]])
 
-    b = np.block([2*dy_dtheta.dot(problem.W), np.zeros(problem.num_constr_full)])
+    b = np.block([2*dy_dtheta.dot(problem.W), np.zeros(problem.groups[gr]['num_constr_full'])])
 
     dxi_dtheta = linalg.lstsq(A, b)
-    return dxi_dtheta[0][:problem.num_inner_params]
+    return dxi_dtheta[0][:problem.groups[gr]['num_inner_params']]
 
 
-def get_dy_dtheta(problem, sy):
-    dy_dtheta = np.zeros(problem.num_inner_params)
-    # TODO: wrong order of datapoints
-    dy_dtheta[:problem.num_datapoints] = np.array([sy[idx][0][5][0] for idx in range(len(sy))])
-    dy_dtheta = dy_dtheta[[1, 0, 2]]
-
-    return np.block([dy_dtheta, np.zeros(2*problem.num_categories)])
+def get_dy_dtheta(gr,
+                  problem: OptimalScalingProblem,
+                  sy_all):
+    return np.block([sy_all, np.zeros(2*problem.groups[gr]['num_categories'])])
 
 
-def get_mu(problem: OptimalScalingProblem, xi):
-    mu = np.zeros(problem.num_constr_full)
-    for idx in range(problem.num_datapoints):
-        cat_idx = problem.get_cat_for_xi_idx(idx)
-        x_lower = xi[problem.lb_indices[cat_idx]]
-        x_upper = xi[problem.ub_indices[cat_idx]]
+def get_mu(gr,
+           problem: OptimalScalingProblem,
+           xi):
+    mu = np.zeros(problem.groups[gr]['num_constr_full'])
+    for idx in range(problem.groups[gr]['num_datapoints']):
+        cat_idx = problem.get_cat_for_xi_idx(gr, idx)
+        x_lower = xi[problem.groups[gr]['lb_indices'][cat_idx]]
+        x_upper = xi[problem.groups[gr]['ub_indices'][cat_idx]]
         y_surr = xi[idx]
         if np.isclose(y_surr, x_lower):
             mu[idx] = 1
         if np.isclose(y_surr, x_upper):
-            mu[problem.num_datapoints + idx] = 1
+            mu[problem.groups[gr]['num_datapoints'] + idx] = 1
 
-    for idx in range(problem.num_categories - 1):
-        x_lower = xi[problem.lb_indices[idx] + 1]
-        x_upper = xi[problem.ub_indices[idx]]
+    for idx in range(problem.groups[gr]['num_categories'] - 1):
+        x_lower = xi[problem.groups[gr]['lb_indices'][idx] + 1]
+        x_upper = xi[problem.groups[gr]['ub_indices'][idx]]
         if np.isclose(x_lower, x_upper):
-            mu[2*problem.num_datapoints + idx] = 1
+            mu[2*problem.groups[gr]['num_datapoints'] + idx] = 1
 
     return mu
 
@@ -173,12 +195,12 @@ def get_xi(gr,
     interval_range, interval_gap = \
         compute_interval_constraints(xs, sim, options)
 
-    xi = np.zeros(problem.num_inner_params)
+    xi = np.zeros(problem.groups[gr]['num_inner_params'])
     surrogate_all, x_lower, x_upper = \
         get_surrogate_all(xs, x_inner_opt['x'], sim, interval_range, interval_gap, options)
-    xi[:problem.num_datapoints] = surrogate_all.flatten()
-    xi[problem.lb_indices] = x_lower
-    xi[problem.ub_indices] = x_upper
+    xi[:problem.groups[gr]['num_datapoints']] = surrogate_all.flatten()
+    xi[problem.groups[gr]['lb_indices']] = x_lower
+    xi[problem.groups[gr]['ub_indices']] = x_upper
     return xi
 
 
@@ -260,15 +282,16 @@ def get_min_max(xs: List[InnerParameter],
     return min_all, max_all
 
 
-def get_sy_all(xs, sim, sy, par_idx):
+def get_sy_all(xs, sy, par_idx):
     sy_all = []
     for x in xs:
         for sy_i, mask_i in \
                 zip(sy, x.ixs):
-            sim_sy = sy_i[mask_i]
-            if mask_i.any():
-                sy_all.append(sim_sy[0])
-    return 0
+                sim_sy = sy_i[:, par_idx, :][mask_i]
+                if mask_i.any():
+                    for sim_sy_i in sim_sy:
+                        sy_all.append(sim_sy_i)
+    return np.array(sy_all)
 
 
 def get_sim_all(xs, sim: List[np.ndarray]) -> list:
@@ -314,10 +337,8 @@ def get_surrogate_all(xs,
                     else:
                         y_surrogate = y_sim_i
                     surrogate_all.append(y_surrogate)
-                    if x_lower not in x_lower_all:
-                        x_lower_all.append(x_lower)
-                    if x_upper not in x_upper_all:
-                        x_upper_all.append(x_upper)
+        x_lower_all.append(x_lower)
+        x_upper_all.append(x_upper)
     return np.array(surrogate_all), np.array(x_lower_all), np.array(x_upper_all)
 
 
@@ -331,7 +352,7 @@ def get_weight_for_surrogate(xs: List[InnerParameter],
     for idx in range(len(sim_x_all) - 1):
         v_net += np.abs(sim_x_all[idx + 1] - sim_x_all[idx])
     w = 0.5 * np.sum(np.abs(sim_x_all)) + v_net + eps
-    return 1  # TODO: w ** 2
+    return 10  # TODO: w ** 2
 
 
 def compute_interval_constraints(xs: List[InnerParameter],

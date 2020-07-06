@@ -8,6 +8,7 @@ from ..objective.amici_util import (
     get_error_output)
 from ..objective.constants import FVAL, GRAD, HESS, RES, SRES, RDATAS
 from .problem import InnerProblem
+from .optimal_scaling_problem import OptimalScalingProblem
 from .solver import InnerSolver, AnalyticalInnerSolver
 from .optimal_scaling_solver import OptimalScalingInnerSolver
 
@@ -32,7 +33,7 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
     """
 
     def __init__(self,
-                 inner_problem: InnerProblem,
+                 inner_problem: OptimalScalingProblem,
                  inner_solver: InnerSolver = None):
         """
         Initialize the calculator from the given problem.
@@ -146,7 +147,7 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
 
         if sensi_order > 0:
             amici_solver.setSensitivityOrder(sensi_order)
-
+            num_model_pars = len(amici_model.getParameterIds())
             # resimulate
             # run amici simulation
             rdatas = amici.runAmiciSimulations(
@@ -156,8 +157,14 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
                 num_threads=min(n_threads, len(edatas)),
             )
             sy = [rdata['sy'] for rdata in rdatas]
-            snllh = self.inner_solver.calculate_gradients(self.inner_problem, x_inner_opt, sim, sy)
-
+            snllh = self.inner_solver.calculate_gradients(self.inner_problem,
+                                                          x_inner_opt,
+                                                          sim,
+                                                          sy,
+                                                          parameter_mapping,
+                                                          x_ids,
+                                                          amici_model,
+                                                          snllh)
         return {FVAL: nllh,
                 GRAD: snllh,
                 HESS: s2nllh,
@@ -166,6 +173,6 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
                 RDATAS: rdatas
                 }
 
-            #return calculate_function_values(
-            #    rdatas, sensi_order, mode, amici_model, amici_solver, edatas,
-            #    x_ids, parameter_mapping,fim_for_hess)
+        #return calculate_function_values(
+        #    rdatas, sensi_order, mode, amici_model, amici_solver, edatas,
+        #    x_ids, parameter_mapping,fim_for_hess)
