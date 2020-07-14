@@ -73,7 +73,8 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
         sres = np.zeros([0, dim])
 
         # set order in solver to 0
-        amici_solver.setSensitivityOrder(0)
+        # amici_solver.setSensitivityOrder(0)
+        amici_solver.setSensitivityOrder(sensi_order)
 
         # fill in boring values
         x_dct = copy.deepcopy(x_dct)
@@ -146,16 +147,16 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
         )
 
         if sensi_order > 0:
-            amici_solver.setSensitivityOrder(sensi_order)
+            #amici_solver.setSensitivityOrder(sensi_order)
             num_model_pars = len(amici_model.getParameterIds())
             # resimulate
             # run amici simulation
-            rdatas = amici.runAmiciSimulations(
-                amici_model,
-                amici_solver,
-                edatas,
-                num_threads=min(n_threads, len(edatas)),
-            )
+            #rdatas = amici.runAmiciSimulations(
+            #    amici_model,
+            #    amici_solver,
+            #    edatas,
+            #    num_threads=min(n_threads, len(edatas)),
+            #)
             sy = [rdata['sy'] for rdata in rdatas]
             snllh = self.inner_solver.calculate_gradients(self.inner_problem,
                                                           x_inner_opt,

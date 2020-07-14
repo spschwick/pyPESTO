@@ -5,9 +5,9 @@ import amici
 
 from .problem import InnerProblem
 from .parameter import InnerParameter
-from.problem import (inner_parameters_from_parameter_df,
-                     ixs_for_measurement_specific_parameters,
-                     ix_matrices_from_arrays)
+from .problem import (inner_parameters_from_parameter_df,
+                      ixs_for_measurement_specific_parameters,
+                      ix_matrices_from_arrays)
 
 
 class OptimalScalingProblem(InnerProblem):
@@ -25,10 +25,10 @@ class OptimalScalingProblem(InnerProblem):
             self.groups[gr]['num_datapoints'] = np.sum([np.sum([np.sum(ixs) for ixs in x.ixs]) for x in xs])
 
             self.groups[gr]['num_inner_params'] = self.groups[gr]['num_datapoints'] + \
-                                                  2*self.groups[gr]['num_categories']
+                                                  2 * self.groups[gr]['num_categories']
 
-            self.groups[gr]['num_constr_full'] = 2*self.groups[gr]['num_datapoints'] +\
-                                                 self.groups[gr]['num_categories'] - 1
+            self.groups[gr]['num_constr_full'] = 2 * self.groups[gr]['num_datapoints'] + \
+                                                 2 * self.groups[gr]['num_categories']  # - 1
 
             self.groups[gr]['lb_indices'] = \
                 list(range(self.groups[gr]['num_datapoints'],
@@ -41,9 +41,11 @@ class OptimalScalingProblem(InnerProblem):
             self.groups[gr]['cat_ixs'] = {}
             self.get_cat_indices(gr, xs)
 
-            self.C = self.initialize_c(gr, xs)
+            self.groups[gr]['C'] = self.initialize_c(gr, xs)
 
-            self.W = self.initialize_w(gr)
+            self.groups[gr]['W'] = self.initialize_w(gr)
+
+            self.groups[gr]['Wdot'] = self.initialize_w(gr)
 
     @staticmethod
     def from_petab_amici(
@@ -69,23 +71,89 @@ class OptimalScalingProblem(InnerProblem):
                 constr[data_idx + self.groups[gr]['num_datapoints'], data_idx] = 1
                 constr[data_idx + self.groups[gr]['num_datapoints'],
                        cat_idx + self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']] = -1
+                data_idx += 1
 
                 # x_upper_i - x_lower_{i+1} <= 0
-                if cat_idx < self.groups[gr]['num_categories'] - 1:
-                    constr[2*self.groups[gr]['num_datapoints'] + cat_idx,
-                           self.groups[gr]['num_datapoints'] + cat_idx + 1] = -1
-                    constr[2*self.groups[gr]['num_datapoints'] + cat_idx,
-                           self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories'] + cat_idx] = 1
-                data_idx += 1
+            if cat_idx == 0:  # - 1:
+                constr[2 * self.groups[gr]['num_datapoints'] + cat_idx,
+                       self.groups[gr]['num_datapoints'] + cat_idx] = -1
+            else:
+                constr[2 * self.groups[gr]['num_datapoints'] + cat_idx,
+                       self.groups[gr]['num_datapoints'] + cat_idx] = -1  # + 1] = -1
+                constr[2 * self.groups[gr]['num_datapoints'] + cat_idx,
+                       self.groups[gr]['num_datapoints'] + self.groups[gr][
+                           'num_categories'] + cat_idx - 1] = 1  # + cat_idx] = 1
+
+            constr[2 * self.groups[gr]['num_datapoints']
+                   + self.groups[gr]['num_categories']  # - 1
+                   + cat_idx, self.groups[gr]['lb_indices'][cat_idx]] = 1
+            constr[2 * self.groups[gr]['num_datapoints']
+                   + self.groups[gr]['num_categories']  # - 1
+                   + cat_idx, self.groups[gr]['ub_indices'][cat_idx]] = -1
 
         return constr
 
     def initialize_w(self, gr):
         weights = np.diag(np.block(
-                [np.ones(self.groups[gr]['num_datapoints']),
-                 np.zeros(2*self.groups[gr]['num_categories'])])
+            [np.ones(self.groups[gr]['num_datapoints']),
+             np.zeros(2 * self.groups[gr]['num_categories'])])
         )
         return weights
+
+    def get_w(self, gr, y_sim_all):
+        weights = np.diag(np.block(
+            [np.ones(self.groups[gr]['num_datapoints']) / (np.sum(np.abs(y_sim_all)) + 1e-8),
+             np.zeros(2 * self.groups[gr]['num_categories'])])
+        )
+        return weights
+
+    def get_wdot(self, gr, y_sim_all, sy_all):
+        weights = np.diag(np.block(
+            [np.ones(self.groups[gr]['num_datapoints']) * (
+                        -1 * np.sum(sy_all) / ((np.sum(np.abs(y_sim_all)) + 1e-8) ** 2)),
+             np.zeros(2 * self.groups[gr]['num_categories'])])
+        )
+        return weights
+
+    def get_d(self, gr, xs, y_sim_all):
+        # if 'minGap' not in options:
+        #    eps = 1e-16
+        # else:
+        #    eps = options['minGap']
+        max_simulation = np.nanmax(y_sim_all)
+
+        interval_range = max_simulation / (2 * len(xs) + 1)
+        interval_gap = max_simulation / (4 * (len(xs) - 1) + 1)
+        # if interval_gap < eps:
+        #   interval_gap = eps
+
+        d = np.zeros(self.groups[gr]['num_constr_full'])
+
+        d[2 * self.groups[gr]['num_datapoints'] + 1:
+          2 * self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']] \
+            = interval_gap + 0.1  # - 1] \
+
+        d[2 * self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']:] \
+            = interval_range
+        return d
+
+    def get_dd_dtheta(self, gr, xs, y_sim_all, sy_all):
+
+        max_sim_idx = np.argmax(y_sim_all)
+        max_sy = sy_all[max_sim_idx]
+        dd_dtheta = np.zeros(self.groups[gr]['num_constr_full'])
+
+        dinterval_range_dtheta = max_sy / (2 * len(xs) + 1)
+        dinterval_gap_dtheta = max_sy / (4 * (len(xs) - 1) + 1)
+
+        dd_dtheta[2 * self.groups[gr]['num_datapoints'] + 1:
+                  2 * self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']] \
+            = dinterval_gap_dtheta
+
+        dd_dtheta[2 * self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']:] \
+            = dinterval_range_dtheta
+
+        return dd_dtheta
 
     def get_cat_for_xi_idx(self, gr, data_idx):
         for cat_idx, (_, indices) in enumerate(self.groups[gr]['cat_ixs'].items()):

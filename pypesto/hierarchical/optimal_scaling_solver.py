@@ -83,6 +83,7 @@ class OptimalScalingInnerSolver(InnerSolver):
             obj = np.sum(
                 [x_inner_opt[idx]['fun'] for idx in range(len(x_inner_opt))]
             )
+        # print(obj)
         return obj
 
     def calculate_gradients(self,
@@ -110,19 +111,25 @@ class OptimalScalingInnerSolver(InnerSolver):
                 xi = get_xi(gr, problem, x_inner_opt[idx], sim, self.options)
                 sim_all = get_sim_all(problem.get_xs_for_group(gr), sim)
                 sy_all = get_sy_all(problem.get_xs_for_group(gr), sy, par_sim_idx)
+
+                problem.groups[gr]['W'] = problem.get_w(gr, sim_all)
+                problem.groups[gr]['Wdot'] = problem.get_wdot(gr, sim_all, sy_all)
+
                 res = np.block([xi[:problem.groups[gr]['num_datapoints']] - sim_all,
                                 np.zeros(problem.groups[gr]['num_inner_params'] - problem.groups[gr]['num_datapoints'])])
 
-                df_dxi = 2 * problem.W.dot(res)
+                df_dxi = 2 * problem.groups[gr]['W'].dot(res)
 
-                mu = get_mu(gr, problem, xi)
-
-                # for theta_i in theta:
                 dy_dtheta = get_dy_dtheta(gr, problem, sy_all)
 
-                dxi_dtheta = calculate_dxi_dtheta(gr, problem, xi, mu, dy_dtheta)
+                dd_dtheta = problem.get_dd_dtheta(gr, problem.get_xs_for_group(gr), sim_all, sy_all)
+                d = problem.get_d(gr, problem.get_xs_for_group(gr), sim_all)
 
-                df_dtheta = -2 * problem.W.dot(dy_dtheta).dot(res)
+                mu = get_mu(gr, problem, xi, res, d)
+
+                dxi_dtheta = calculate_dxi_dtheta(gr, problem, xi, mu, dy_dtheta, res, d, dd_dtheta)
+
+                df_dtheta = res.dot(res.dot(problem.groups[gr]['Wdot']) - 2*problem.groups[gr]['W'].dot(dy_dtheta)) # -2 * problem.W.dot(dy_dtheta).dot(res)
 
                 grad += dxi_dtheta.dot(df_dxi) + df_dtheta
             snllh[par_opt_idx] = grad
@@ -145,15 +152,25 @@ def calculate_dxi_dtheta(gr,
                          problem: OptimalScalingProblem,
                          xi,
                          mu,
-                         dy_dtheta):
-    from scipy import linalg
-    A = np.block([[2 * problem.W, problem.C.transpose()],
-                  [(mu*problem.C.transpose()).transpose(), np.diag(problem.C.dot(xi))]])
+                         dy_dtheta,
+                         res,
+                         d,
+                         dd_dtheta):
+    # from scipy import linalg
+    from scipy.sparse import linalg
+    # A = np.block([[2 * problem.W, problem.C.transpose()],
+    #              [(mu*problem.C.transpose()).transpose(), np.diag(problem.C.dot(xi))]])
+    A = np.block([[2 * problem.groups[gr]['W'], problem.groups[gr]['C'].transpose()],
+                  [(mu*problem.groups[gr]['C'].transpose()).transpose(), np.diag(problem.groups[gr]['C'].dot(xi) + d)]])
 
-    b = np.block([2*dy_dtheta.dot(problem.W), np.zeros(problem.groups[gr]['num_constr_full'])])
+    # b = np.block([2*dy_dtheta.dot(problem.W), np.zeros(problem.groups[gr]['num_constr_full'])])
+    # b = np.block([2*dy_dtheta.dot(problem.W) - problem.Wdot.dot(res), np.zeros(problem.groups[gr]['num_constr_full'])])
+    b = np.block(
+        [2 * dy_dtheta.dot(problem.groups[gr]['W']) - 2*problem.groups[gr]['Wdot'].dot(res), -mu*dd_dtheta])
 
-    dxi_dtheta = linalg.lstsq(A, b)
-    return dxi_dtheta[0][:problem.groups[gr]['num_inner_params']]
+    # dxi_dtheta = linalg.lstsq(A, b)
+    dxi_dtheta = linalg.spsolve(A, b)
+    return dxi_dtheta[:problem.groups[gr]['num_inner_params']]  # dxi_dtheta[0][:problem.groups[gr]['num_inner_params']]
 
 
 def get_dy_dtheta(gr,
@@ -164,7 +181,10 @@ def get_dy_dtheta(gr,
 
 def get_mu(gr,
            problem: OptimalScalingProblem,
-           xi):
+           xi,
+           res,
+           d):
+    '''
     mu = np.zeros(problem.groups[gr]['num_constr_full'])
     for idx in range(problem.groups[gr]['num_datapoints']):
         cat_idx = problem.get_cat_for_xi_idx(gr, idx)
@@ -179,10 +199,18 @@ def get_mu(gr,
     for idx in range(problem.groups[gr]['num_categories'] - 1):
         x_lower = xi[problem.groups[gr]['lb_indices'][idx] + 1]
         x_upper = xi[problem.groups[gr]['ub_indices'][idx]]
-        if np.isclose(x_lower, x_upper):
+        if np.isclose(x_lower - d[6], x_upper):
             mu[2*problem.groups[gr]['num_datapoints'] + idx] = 1
 
-    return mu
+    for idx in range(problem.groups[gr]['num_categories']):
+        x_lower = xi[problem.groups[gr]['lb_indices'][idx]]
+        x_upper = xi[problem.groups[gr]['ub_indices'][idx]]
+        if np.isclose(x_lower + d[-1], x_upper):
+            mu[2*problem.groups[gr]['num_datapoints'] + problem.groups[gr]['num_categories'] - 1 + idx] = 1
+    '''
+    from scipy import linalg
+    mu = linalg.lstsq(problem.groups[gr]['C'].transpose(), -2*res.dot(problem.groups[gr]['W']))
+    return mu[0]
 
 
 def get_xi(gr,
@@ -347,12 +375,13 @@ def get_weight_for_surrogate(xs: List[InnerParameter],
     """Calculate weights for objective function"""
 
     sim_x_all = get_sim_all(xs, sim)
-    eps = 1e-10
+    eps = 1e-8
     v_net = 0
     for idx in range(len(sim_x_all) - 1):
         v_net += np.abs(sim_x_all[idx + 1] - sim_x_all[idx])
     w = 0.5 * np.sum(np.abs(sim_x_all)) + v_net + eps
-    return 10  # TODO: w ** 2
+    # print(w ** 2)
+    return np.sum(np.abs(sim_x_all)) + eps  # TODO: w ** 2
 
 
 def compute_interval_constraints(xs: List[InnerParameter],
@@ -386,9 +415,9 @@ def compute_interval_constraints(xs: List[InnerParameter],
             f"Please use {MAX} or {MAXMIN}."
 
         )
-    if interval_gap < eps:
-        interval_gap = eps
-    return 0.0, 0.0  # TODO: interval_range, interval_gap
+    #if interval_gap < eps:
+    #    interval_gap = eps
+    return interval_range, interval_gap + 0.1 # 0.0, 0.0  # TODO: interval_range, interval_gap
 
 
 def y2xi(optimal_scaling_bounds: np.ndarray,
