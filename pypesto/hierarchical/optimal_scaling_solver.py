@@ -156,21 +156,18 @@ def calculate_dxi_dtheta(gr,
                          res,
                          d,
                          dd_dtheta):
-    # from scipy import linalg
     from scipy.sparse import linalg
-    # A = np.block([[2 * problem.W, problem.C.transpose()],
-    #              [(mu*problem.C.transpose()).transpose(), np.diag(problem.C.dot(xi))]])
+    from scipy.sparse import csc_matrix
+
     A = np.block([[2 * problem.groups[gr]['W'], problem.groups[gr]['C'].transpose()],
                   [(mu*problem.groups[gr]['C'].transpose()).transpose(), np.diag(problem.groups[gr]['C'].dot(xi) + d)]])
+    A_sp = csc_matrix(A)
 
-    # b = np.block([2*dy_dtheta.dot(problem.W), np.zeros(problem.groups[gr]['num_constr_full'])])
-    # b = np.block([2*dy_dtheta.dot(problem.W) - problem.Wdot.dot(res), np.zeros(problem.groups[gr]['num_constr_full'])])
     b = np.block(
         [2 * dy_dtheta.dot(problem.groups[gr]['W']) - 2*problem.groups[gr]['Wdot'].dot(res), -mu*dd_dtheta])
 
-    # dxi_dtheta = linalg.lstsq(A, b)
-    dxi_dtheta = linalg.spsolve(A, b)
-    return dxi_dtheta[:problem.groups[gr]['num_inner_params']]  # dxi_dtheta[0][:problem.groups[gr]['num_inner_params']]
+    dxi_dtheta = linalg.spsolve(A_sp, b)
+    return dxi_dtheta[:problem.groups[gr]['num_inner_params']]
 
 
 def get_dy_dtheta(gr,
@@ -184,32 +181,16 @@ def get_mu(gr,
            xi,
            res,
            d):
+    from scipy import linalg
     '''
     mu = np.zeros(problem.groups[gr]['num_constr_full'])
-    for idx in range(problem.groups[gr]['num_datapoints']):
-        cat_idx = problem.get_cat_for_xi_idx(gr, idx)
-        x_lower = xi[problem.groups[gr]['lb_indices'][cat_idx]]
-        x_upper = xi[problem.groups[gr]['ub_indices'][cat_idx]]
-        y_surr = xi[idx]
-        if np.isclose(y_surr, x_lower):
-            mu[idx] = 1
-        if np.isclose(y_surr, x_upper):
-            mu[problem.groups[gr]['num_datapoints'] + idx] = 1
-
-    for idx in range(problem.groups[gr]['num_categories'] - 1):
-        x_lower = xi[problem.groups[gr]['lb_indices'][idx] + 1]
-        x_upper = xi[problem.groups[gr]['ub_indices'][idx]]
-        if np.isclose(x_lower - d[6], x_upper):
-            mu[2*problem.groups[gr]['num_datapoints'] + idx] = 1
-
-    for idx in range(problem.groups[gr]['num_categories']):
-        x_lower = xi[problem.groups[gr]['lb_indices'][idx]]
-        x_upper = xi[problem.groups[gr]['ub_indices'][idx]]
-        if np.isclose(x_lower + d[-1], x_upper):
-            mu[2*problem.groups[gr]['num_datapoints'] + problem.groups[gr]['num_categories'] - 1 + idx] = 1
+    mu_zero_indices = np.array(problem.groups[gr]['C'].dot(xi) - d).nonzero()[0]
+    mu_non_zero_indices = np.where(np.array(problem.groups[gr]['C'].dot(xi) - d) == 0)[0]
+    A = problem.groups[gr]['C'].transpose()[:, mu_non_zero_indices]
+    mu_non_zero = linalg.lstsq(A, -2*res.dot(problem.groups[gr]['W']))[0]
+    mu[mu_non_zero_indices] = mu_non_zero
     '''
-    from scipy import linalg
-    mu = linalg.lstsq(problem.groups[gr]['C'].transpose(), -2*res.dot(problem.groups[gr]['W']))
+    mu = linalg.lstsq(problem.groups[gr]['C'].transpose(), -2*res.dot(problem.groups[gr]['W']), lapack_driver='gelsy')
     return mu[0]
 
 
@@ -316,9 +297,9 @@ def get_sy_all(xs, sy, par_idx):
         for sy_i, mask_i in \
                 zip(sy, x.ixs):
                 sim_sy = sy_i[:, par_idx, :][mask_i]
-                if mask_i.any():
-                    for sim_sy_i in sim_sy:
-                        sy_all.append(sim_sy_i)
+                #if mask_i.any():
+                for sim_sy_i in sim_sy:
+                    sy_all.append(sim_sy_i)
     return np.array(sy_all)
 
 
@@ -330,9 +311,9 @@ def get_sim_all(xs, sim: List[np.ndarray]) -> list:
         for sim_i, mask_i in \
                 zip(sim, x.ixs):
             sim_x = sim_i[mask_i]
-            if mask_i.any():
-                for sim_x_i in sim_x:
-                    sim_all.append(sim_x_i)
+            #if mask_i.any():
+            for sim_x_i in sim_x:
+               sim_all.append(sim_x_i)
     return sim_all
 
 
@@ -355,15 +336,17 @@ def get_surrogate_all(xs,
             )
         for sim_i, mask_i in \
                 zip(sim, x.ixs):
-            if mask_i.any():
+            #if mask_i.any():
                 y_sim = sim_i[mask_i]
                 for y_sim_i in y_sim:
                     if x_lower > y_sim_i:
                         y_surrogate = x_lower
                     elif y_sim_i > x_upper:
                         y_surrogate = x_upper
-                    else:
+                    elif x_lower <= y_sim_i <= x_upper:
                         y_surrogate = y_sim_i
+                    else:
+                        continue
                     surrogate_all.append(y_surrogate)
         x_lower_all.append(x_lower)
         x_upper_all.append(x_upper)
@@ -494,15 +477,17 @@ def obj_surrogate_data(xs: List[InnerParameter],
             )
         for sim_i, mask_i in \
                 zip(sim, x.ixs):
-            if mask_i.any():
+            #if mask_i.any():
                 y_sim = sim_i[mask_i]
                 for y_sim_i in y_sim:
                     if x_lower > y_sim_i:
                         y_surrogate = x_lower
                     elif y_sim_i > x_upper:
                         y_surrogate = x_upper
-                    else:
+                    elif x_lower <= y_sim_i <= x_upper:
                         y_surrogate = y_sim_i
+                    else:
+                        continue
                     obj += (y_surrogate - y_sim_i) ** 2
     obj = np.divide(obj, w)
     return obj

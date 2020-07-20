@@ -98,7 +98,6 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
             edatas,
             num_threads=min(n_threads, len(edatas)),
         )
-
         self._check_least_squares(sensi_order, mode, rdatas)
 
         # check if any simulation failed
@@ -109,6 +108,7 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
         sigma = [rdata['sigmay'] for rdata in rdatas]
 
         # compute optimal inner parameters
+
         x_inner_opt = self.inner_solver.solve(
             self.inner_problem, sim, sigma, scaled=True)
 
@@ -166,6 +166,7 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
                                                           x_ids,
                                                           amici_model,
                                                           snllh)
+
         return {FVAL: nllh,
                 GRAD: snllh,
                 HESS: s2nllh,
