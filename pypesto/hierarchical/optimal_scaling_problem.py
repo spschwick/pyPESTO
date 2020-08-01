@@ -115,7 +115,7 @@ class OptimalScalingProblem(InnerProblem):
         )
         return weights
 
-    def get_d(self, gr, xs, y_sim_all):
+    def get_d(self, gr, xs, y_sim_all, eps):
         # if 'minGap' not in options:
         #    eps = 1e-16
         # else:
@@ -131,7 +131,7 @@ class OptimalScalingProblem(InnerProblem):
 
         d[2 * self.groups[gr]['num_datapoints'] + 1:
           2 * self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']] \
-            = interval_gap + 0.1  # - 1] \
+            = interval_gap + eps  # - 1] \
 
         d[2 * self.groups[gr]['num_datapoints'] + self.groups[gr]['num_categories']:] \
             = interval_range

@@ -123,7 +123,7 @@ class OptimalScalingInnerSolver(InnerSolver):
                 dy_dtheta = get_dy_dtheta(gr, problem, sy_all)
 
                 dd_dtheta = problem.get_dd_dtheta(gr, problem.get_xs_for_group(gr), sim_all, sy_all)
-                d = problem.get_d(gr, problem.get_xs_for_group(gr), sim_all)
+                d = problem.get_d(gr, problem.get_xs_for_group(gr), sim_all, self.options['minGap'])
 
                 mu = get_mu(gr, problem, xi, res, d)
 
@@ -400,7 +400,7 @@ def compute_interval_constraints(xs: List[InnerParameter],
         )
     #if interval_gap < eps:
     #    interval_gap = eps
-    return interval_range, interval_gap + 0.1 # 0.0, 0.0  # TODO: interval_range, interval_gap
+    return interval_range, interval_gap + eps # 0.0, 0.0  # TODO: interval_range, interval_gap
 
 
 def y2xi(optimal_scaling_bounds: np.ndarray,
