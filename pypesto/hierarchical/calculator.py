@@ -90,7 +90,6 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
             parameter_mapping=parameter_mapping,
             amici_model=amici_model
         )
-
         # run amici simulation
         rdatas = amici.runAmiciSimulations(
             amici_model,

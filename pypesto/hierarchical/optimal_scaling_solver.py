@@ -230,8 +230,12 @@ def optimize_surrogate_data(xs: List[InnerParameter],
 
     inner_options = \
         get_inner_options(options, xs, sim, interval_range, interval_gap)
-
-    results = minimize(obj_surr, **inner_options)
+    try:
+        results = minimize(obj_surr, **inner_options)
+    except:
+        print('x0 violate bound constraints. Retrying with array of zeros.')
+        inner_options['x0'] = np.zeros(len(inner_options['x0']))
+        results = minimize(obj_surr, **inner_options)
     return results
 
 
@@ -250,7 +254,7 @@ def get_inner_options(options: Dict,
         parameter_length = len(xs)
         x0 = np.linspace(
             np.max([min_all, interval_range]),
-            max_all + interval_range,
+            max_all + (interval_range + interval_gap)*parameter_length,
             parameter_length
         )
     elif options['method'] == STANDARD:
@@ -265,7 +269,7 @@ def get_inner_options(options: Dict,
 
     if options['reparameterized']:
         x0 = y2xi(x0, xs, interval_gap, interval_range)
-        bounds = Bounds([0] * parameter_length, [max_all] * parameter_length)
+        bounds = Bounds([0.0] * parameter_length, [max_all + (interval_range + interval_gap)*parameter_length] * parameter_length)
 
         inner_options = {'x0': x0, 'method': 'L-BFGS-B',
                          'options': {'maxiter': 2000, 'ftol': 1e-10},
@@ -400,7 +404,7 @@ def compute_interval_constraints(xs: List[InnerParameter],
         )
     #if interval_gap < eps:
     #    interval_gap = eps
-    return interval_range, interval_gap + eps # 0.0, 0.0  # TODO: interval_range, interval_gap
+    return interval_range, interval_gap + eps
 
 
 def y2xi(optimal_scaling_bounds: np.ndarray,
