@@ -44,7 +44,8 @@ class AmiciCalculator:
                  n_threads: int,
                  x_ids: Sequence[str],
                  parameter_mapping: 'ParameterMapping',
-                 fim_for_hess: bool):
+                 fim_for_hess: bool,
+                 chunk_size: int = None):
         """Perform the actual AMICI call.
 
         This function is called inside :func:`pypesto.AmiciObjective.__call__`
@@ -75,6 +76,13 @@ class AmiciCalculator:
         fim_for_hess:
             Whether to use the FIM (if available) instead of the Hessian (if
             requested).
+        chunk_size:
+            In some cases, we don't want to compute all predictions at once
+            when calling the prediction function, as this might not fit into
+            the memory for large datasets and models.
+            Here, the user can specify a maximum chunk size of conditions,
+            which should be simulated at a time.
+            Defaults to None, meaning that all conditions will be simulated.
         """
         # set order in solver
         if sensi_order == 2 and fim_for_hess:
@@ -91,26 +99,23 @@ class AmiciCalculator:
             parameter_mapping=parameter_mapping,
             amici_model=amici_model
         )
+        rdatas = get_output(edatas=edatas,
+                            amici_model=amici_model,
+                            amici_solver=amici_solver,
+                            chunk_size=chunk_size,
+                            mode=mode,
+                            n_threads=n_threads)
 
-        # run amici simulation
-        rdatas = amici.runAmiciSimulations(
-            amici_model,
-            amici_solver,
-            edatas,
-            num_threads=min(n_threads, len(edatas)),
-        )
         if not self._known_least_squares_safe and mode == MODE_RES and \
                 sensi_order > 0:
-            if not amici_model.getAddSigmaResiduals() and any(
+            if any(
                 ((r['ssigmay'] is not None and np.any(r['ssigmay']))
                  or
                  (r['ssigmaz'] is not None and np.any(r['ssigmaz'])))
                 for r in rdatas
             ):
                 raise RuntimeError('Cannot use least squares solver with'
-                                   'parameter dependent sigma! Support can be '
-                                   'enabled via '
-                                   'amici_model.setAddSigmaResiduals().')
+                                   'parameter dependent sigma!')
             self._known_least_squares_safe = True  # don't check this again
 
         self._check_least_squares(sensi_order, mode, rdatas)
@@ -239,3 +244,54 @@ def calculate_function_values(rdatas,
         RDATAS: rdatas
     }
     return filter_return_dict(ret)
+
+
+def get_output(edatas: List['amici.ExpData'],
+               amici_model: AmiciModel,
+               amici_solver: AmiciSolver,
+               chunk_size: int,
+               mode: str,
+               n_threads: int):
+    rdatas = []
+    # spliting the ExpData in chunks and simulating chunk wise
+    # Do we have a maximum number of simulations allowed?
+    n_edatas = len(edatas)
+    if chunk_size is None:
+        # simulate all conditions at once
+        n_simulations = 1
+    else:
+        # simulate only a subset of conditions
+        n_simulations = int(np.ceil(len(edatas) / chunk_size))
+    # get keys based on mode
+    if mode == MODE_FUN:
+        requested_keys = ['llh', 'sllh', 'status', 'y', 'sigmay']
+    elif mode == MODE_RES:
+        requested_keys = ['res', 'sres', 'status']
+    else:
+        requested_keys = None
+
+    for i_sim in range(n_simulations):
+        # slice out the conditions we actually want
+        if chunk_size is None:
+            ids = slice(0, n_edatas)
+        else:
+            ids = slice(i_sim * chunk_size,
+                        min((i_sim + 1) * chunk_size, n_edatas))
+
+        chunk = amici.runAmiciSimulations(
+            amici_model,
+            amici_solver,
+            edatas[ids],
+            num_threads=min(n_threads, len(edatas)))
+        if requested_keys is not None:
+            rdatas.extend([{key: bit[key] for key in requested_keys}
+                           for bit in chunk])
+        else:
+            # run amici simulation
+            rdatas.extend(amici.runAmiciSimulations(
+                amici_model,
+                amici_solver,
+                edatas[ids],
+                num_threads=min(n_threads, len(edatas)),
+            ))
+        return rdatas

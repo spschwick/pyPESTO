@@ -3,7 +3,7 @@ import copy
 import numpy as np
 
 from ..objective.amici_calculator import (
-    AmiciCalculator, calculate_function_values)
+    AmiciCalculator, calculate_function_values, get_output)
 from ..objective.amici_util import (
     get_error_output)
 from ..objective.constants import FVAL, GRAD, HESS, RES, SRES, RDATAS
@@ -60,7 +60,8 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
                  n_threads: int,
                  x_ids: Sequence[str],
                  parameter_mapping: 'ParameterMapping',
-                 fim_for_hess: bool):
+                 fim_for_hess: bool,
+                 chunk_size: int=None):
 
         dim = len(x_ids)
         nllh = 0.0
@@ -89,12 +90,12 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
         )
 
         # run amici simulation
-        rdatas = amici.runAmiciSimulations(
-            amici_model,
-            amici_solver,
-            edatas,
-            num_threads=min(n_threads, len(edatas)),
-        )
+        rdatas = get_output(edatas=edatas,
+                            amici_model=amici_model,
+                            amici_solver=amici_solver,
+                            chunk_size=chunk_size,
+                            mode=mode,
+                            n_threads=n_threads)
 
         self._check_least_squares(sensi_order, mode, rdatas)
 
