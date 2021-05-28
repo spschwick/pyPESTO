@@ -266,7 +266,7 @@ def get_output(edatas: List['amici.ExpData'],
     if mode == MODE_FUN:
         requested_keys = ['llh', 'sllh', 'status', 'y', 'sigmay']
     elif mode == MODE_RES:
-        requested_keys = ['res', 'sres', 'status']
+        requested_keys = ['res', 'sres', 'chi2', 'status']
     else:
         requested_keys = None
 
