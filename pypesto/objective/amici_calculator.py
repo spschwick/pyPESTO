@@ -92,19 +92,16 @@ class AmiciCalculator:
             amici_solver.setSensitivityOrder(sensi_order)
 
         # fill in parameters
-        amici.parameter_mapping.fill_in_parameters(
-            edatas=edatas,
-            problem_parameters=x_dct,
-            scaled_parameters=True,
-            parameter_mapping=parameter_mapping,
-            amici_model=amici_model
-        )
         rdatas = get_output(edatas=edatas,
                             amici_model=amici_model,
                             amici_solver=amici_solver,
                             chunk_size=chunk_size,
                             mode=mode,
-                            n_threads=n_threads)
+                            n_threads=n_threads,
+                            problem_parameters=x_dct,
+                            scaled_parameters=True,
+                            parameter_mapping=parameter_mapping,
+                            )
 
         if not self._known_least_squares_safe and mode == MODE_RES and \
                 sensi_order > 0:
@@ -251,7 +248,11 @@ def get_output(edatas: List['amici.ExpData'],
                amici_solver: AmiciSolver,
                chunk_size: int,
                mode: str,
-               n_threads: int):
+               n_threads: int,
+               problem_parameters,
+               scaled_parameters,
+               parameter_mapping,
+               ):
     rdatas = []
     # spliting the ExpData in chunks and simulating chunk wise
     # Do we have a maximum number of simulations allowed?
@@ -278,11 +279,20 @@ def get_output(edatas: List['amici.ExpData'],
             ids = slice(i_sim * chunk_size,
                         min((i_sim + 1) * chunk_size, n_edatas))
 
+        amici.parameter_mapping.fill_in_parameters(
+            edatas=edatas[ids],
+            problem_parameters=problem_parameters,
+            scaled_parameters=True,
+            parameter_mapping=parameter_mapping[ids],
+            amici_model=amici_model
+        )
+
         chunk = amici.runAmiciSimulations(
             amici_model,
             amici_solver,
             edatas[ids],
             num_threads=min(n_threads, len(edatas)))
+
         if requested_keys is not None:
             rdatas.extend([{key: bit[key] for key in requested_keys}
                            for bit in chunk])
@@ -294,4 +304,4 @@ def get_output(edatas: List['amici.ExpData'],
                 edatas[ids],
                 num_threads=min(n_threads, len(edatas)),
             ))
-        return rdatas
+    return rdatas

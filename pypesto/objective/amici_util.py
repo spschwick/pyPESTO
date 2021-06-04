@@ -282,7 +282,7 @@ def log_simulation(data_ix, rdata):
     if t_steadystate in rdata and rdata[t_steadystate] != np.nan:
         logger.debug(f"t_steadystate: {rdata[t_steadystate]}")
 
-    logger.debug(f"res: {rdata['res']}")
+    # logger.debug(f"res: {rdata['res']}")
 
 
 def get_error_output(
