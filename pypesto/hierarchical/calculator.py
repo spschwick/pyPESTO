@@ -90,12 +90,17 @@ class HierarchicalAmiciCalculator(AmiciCalculator):
         )
 
         # run amici simulation
+        # fill in parameters
         rdatas = get_output(edatas=edatas,
                             amici_model=amici_model,
                             amici_solver=amici_solver,
                             chunk_size=chunk_size,
                             mode=mode,
-                            n_threads=n_threads)
+                            n_threads=n_threads,
+                            problem_parameters=x_dct,
+                            scaled_parameters=True,
+                            parameter_mapping=parameter_mapping,
+                            )
 
         self._check_least_squares(sensi_order, mode, rdatas)
 
