@@ -290,7 +290,9 @@ class EnsemblePrediction:
                 for prediction in self.prediction_results
             ]
             # stack into one numpy array
-            return np.stack(output_weight_list, axis=-1)
+            output_weights = np.stack(output_weight_list, axis=-1)
+            output_weights -= np.max(output_weights)
+            return output_weights
 
         def _stack_sigmas(ic: int):
             """
@@ -733,6 +735,7 @@ class Ensemble:
             abs_cutoff = result.optimize_result[0].fval + rel_cutoff
         else:
             abs_cutoff = calculate_cutoff(result=result, percentile=percentile)
+        breakpoint()
         if not result.optimize_result.list[0].history.options['trace_record']:
             logger.warning(
                 'The optimize result has no trace. The Ensemble '
